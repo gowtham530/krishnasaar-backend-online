@@ -1,102 +1,110 @@
 from flask import Flask, request, jsonify
-from gtts import gTTS
-import requests
+from flask_cors import CORS
 import os
 import uuid
+import logging
+import requests
 
-app = Flask(__name__)
+# Optional translation
+try:
+    from argostranslate import package, translate
+    translation_enabled = True
+except ImportError:
+    translation_enabled = False
 
-TOGETHER_API_KEY = "tgp_v1_2pRyRXB_U7Dcow3nzf4ghmdZu8zGyZrhxF7SaQxxh3U"
+from dotenv import load_dotenv
+load_dotenv()
+
+# Load Together API key
+TOGETHER_API_KEY = os.getenv("tgp_v1_2pRyRXB_U7Dcow3nzf4ghmdZu8zGyZrhxF7SaQxxh3U") or "tgp_v1_2pRyRXB_U7Dcow3nzf4ghmdZu8zGyZrhxF7SaQxxh3U"
 TOGETHER_API_URL = "https://api.together.xyz/v1/chat/completions"
-TRANSLATE_API_URL = "https://translate.argosopentech.com/translate"
+TOGETHER_MODEL_NAME = "mistralai/Mistral-7B-Instruct-v0.2"
 
-# Temporary folder for audio
-AUDIO_FOLDER = "static/audio"
-os.makedirs(AUDIO_FOLDER, exist_ok=True)
+# App setup
+app = Flask(__name__)
+CORS(app)
+logging.basicConfig(level=logging.INFO)
 
-def translate_text(text, source_lang, target_lang):
+# Translation helper
+def translate_text(text, from_lang, to_lang):
+    if not translation_enabled or not text.strip() or from_lang == to_lang:
+        return text
     try:
-        payload = {
-            "q": text,
-            "source": source_lang,
-            "target": target_lang,
-            "format": "text"
+        installed_languages = translate.get_installed_languages()
+        src_lang = next((l for l in installed_languages if l.code == from_lang), None)
+        tgt_lang = next((l for l in installed_languages if l.code == to_lang), None)
+        if src_lang and tgt_lang:
+            translation = src_lang.get_translation(tgt_lang)
+            return translation.translate(text)
+    except Exception as e:
+        logging.error(f"Translation error: {e}")
+    return text
+
+# Together API model call
+def get_model_response(user_input):
+    try:
+        headers = {
+            "Authorization": f"Bearer {TOGETHER_API_KEY}",
+            "Content-Type": "application/json"
         }
-        response = requests.post(TRANSLATE_API_URL, json=payload)
+
+        payload = {
+            "model": TOGETHER_MODEL_NAME,
+            "messages": [
+                {"role": "system", "content": "You are Lord Krishna from the Mahabharata, giving wise, spiritual, and compassionate answers."},
+                {"role": "user", "content": user_input}
+            ],
+            "temperature": 0.7
+        }
+
+        response = requests.post(TOGETHER_API_URL, headers=headers, json=payload)
         response.raise_for_status()
-        return response.json()["translatedText"]
-    except Exception as e:
-        print("Translation Error:", e)
-        return "Translation failed"
+        result = response.json()
 
-def get_deepseek_response(prompt):
-    headers = {
-        "Authorization": f"Bearer {TOGETHER_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "deepseek-ai/deepseek-chat",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.7
-    }
-    try:
-        res = requests.post(TOGETHER_API_URL, headers=headers, json=payload)
-        res.raise_for_status()
-        return res.json()['choices'][0]['message']['content']
-    except Exception as e:
-        print("DeepSeek Error:", e)
-        return "Sorry, the model didn’t return a proper response."
+        return result['choices'][0]['message']['content'].strip()
 
-def text_to_speech(text, lang="en"):
-    try:
-        filename = f"{uuid.uuid4().hex}.mp3"
-        filepath = os.path.join(AUDIO_FOLDER, filename)
-        tts = gTTS(text=text, lang=lang)
-        tts.save(filepath)
-        return f"/static/audio/{filename}"
     except Exception as e:
-        print("TTS Error:", e)
+        logging.error(f"Together API error: {e}")
         return None
 
-@app.route("/ask", methods=["POST"])
-def ask():
-    try:
-        data = request.get_json()
-        user_input = data.get("user_input", "")
-        source_lang = data.get("source_lang", "en")
+@app.route('/chat', methods=['POST'])
+def chat():
+    data = request.get_json()
+    user_input = data.get("message", "")
+    lang = data.get("language", "en")
 
-        # Detect target direction
-        if source_lang in ["te", "hi"]:
-            input_in_english = translate_text(user_input, source_lang, "en")
-        else:
-            input_in_english = user_input
+    logging.info(f"User input: {user_input} | Language: {lang}")
 
-        # Get response from DeepSeek
-        bot_response_en = get_deepseek_response(input_in_english)
+    # Step 1: Translate input to English if needed
+    input_english = translate_text(user_input, lang, "en")
+    logging.info(f"Translated to English: {input_english}")
 
-        # Translate back to user language
-        if source_lang in ["te", "hi"]:
-            bot_response_local = translate_text(bot_response_en, "en", source_lang)
-        else:
-            bot_response_local = bot_response_en
+    # Step 2: Get model response from Together
+    model_response = get_model_response(input_english)
+    logging.info(f"Model response (EN): {model_response}")
 
-        # Generate voice output
-        audio_url = text_to_speech(bot_response_local, lang=source_lang if source_lang in ["te", "hi"] else "en")
-
+    if not model_response:
         return jsonify({
-            "text_response": bot_response_local,
-            "english_reference": bot_response_en,
-            "audio_url": audio_url
+            "audio_url": "",
+            "english_reference": "Sorry, the model didn’t return a proper response.",
+            "text_response": "Translation failed"
         })
 
-    except Exception as e:
-        print("Server Error:", e)
-        return jsonify({"error": "Server error occurred"}), 500
+    # Step 3: Translate back to target language
+    final_response = translate_text(model_response, "en", lang)
+    logging.info(f"Translated response to '{lang}': {final_response}")
 
-@app.route("/")
-def home():
-    return "KrishnaSaar backend is running"
+    # Step 4: Optional audio (placeholder only)
+    audio_filename = f"{uuid.uuid4().hex}.mp3"
+    audio_path = os.path.join("static/audio", audio_filename)
+    # [You can add TTS save here]
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    return jsonify({
+        "audio_url": f"/static/audio/{audio_filename}",
+        "english_reference": model_response,
+        "text_response": final_response
+    })
 
+if __name__ == '__main__':
+    os.makedirs("static/audio", exist_ok=True)
+    app.run(debug=True)
