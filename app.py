@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Load Together API key
-TOGETHER_API_KEY = os.getenv("tgp_v1_2pRyRXB_U7Dcow3nzf4ghmdZu8zGyZrhxF7SaQxxh3U") or "tgp_v1_2pRyRXB_U7Dcow3nzf4ghmdZu8zGyZrhxF7SaQxxh3U"
+TOGETHER_API_KEY = os.getenv("TOGETHER_API_KEY") or "tgp_v1_2pRyRXB_U7Dcow3nzf4ghmdZu8zGyZrhxF7SaQxxh3U"
 TOGETHER_API_URL = "https://api.together.xyz/v1/chat/completions"
 TOGETHER_MODEL_NAME = "mistralai/Mistral-7B-Instruct-v0.2"
 
@@ -68,6 +68,8 @@ def get_model_response(user_input):
         return None
 
 @app.route('/chat', methods=['POST'])
+def home():
+    return "✅ KrishnaSaar backend is running!"
 def chat():
     data = request.get_json()
     user_input = data.get("message", "")
@@ -108,3 +110,4 @@ def chat():
 if __name__ == '__main__':
     os.makedirs("static/audio", exist_ok=True)
     app.run(debug=True)
+
